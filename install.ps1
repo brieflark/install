@@ -6,13 +6,13 @@
 # 저장소에서는 .gitattributes 의 `-text` 로 줄 끝 변환을 막아 둔다(해시가 곧 서빙되는 바이트).
 #
 # 단계 (있으면 건너뛰고, 없으면 이름·출처·설치 위치를 보인 뒤 Enter):
-#   0 점검   1 Git   2 uv   3 bun   4 Claude Code   5 GitHub CLI·로그인   6 제품 받기 + 서명 확인   7 설치 마법사
+#   0 점검   1 Git   2 uv   3 bun   4 Node.js   5 Claude Code   6 GitHub CLI·로그인   7 제품 받기 + 서명 확인   8 설치 마법사
 #
 # 시험용 환경변수 (사용자에게 안내하지 않는다):
 #   BRIEFLARK_INSTALL_ROOT   제품 폴더를 %USERPROFILE%\Brieflark 대신 이 경로로 (운영 설치와 분리해 시험할 때). 60자 이하·OneDrive 밖.
 #   BRIEFLARK_INSTALL_YES=1  "Enter를 누르면" 질문을 묻지 않고 진행 (자동 시험용).
 #   BRIEFLARK_ALLOW_ADMIN=1  관리자 창에서도 진행 (Windows Sandbox 처럼 관리자뿐인 시험 환경용).
-#   BRIEFLARK_SKIP_WIZARD=1  7단계(마법사)를 넘기지 않고 건너뛴다 (운영 PC에서는 설치 가드가 멈추는 것이 정상).
+#   BRIEFLARK_SKIP_WIZARD=1  8단계(마법사)를 넘기지 않고 건너뛴다 (운영 PC에서는 설치 가드가 멈추는 것이 정상).
 #
 # 전체를 함수로 감싸 프로세스 종료 명령 대신 `return` 만 쓴다 — iex 안에서 종료하면 사용자의 PowerShell 창이 닫힌다.
 
@@ -38,6 +38,11 @@ function Invoke-BrieflarkInstall {
     $BunUrl = 'https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-windows-x64.zip'
     $BunSha256 = '0bf84e808552beea67bf1202a287a35c6c825d837b287b3f8e9dd513dba35d3d'
 
+    # Node.js (Windows 캘린더 연결의 MCP 서버가 node 로 돈다): nodejs.org 공식 릴리스 zip (2026-10-21 Windows 에서 해시·실행 확인)
+    $NodeVersion = '24.22.0'
+    $NodeUrl = 'https://nodejs.org/dist/v24.22.0/node-v24.22.0-win-x64.zip'
+    $NodeSha256 = 'f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3'
+
     $GhVersion = '2.102.0'
     $GhUrl = 'https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_windows_amd64.zip'
     $GhSha256 = 'ae64e556ecc240b200f7eba60d550e4bb60d78e860e69dd88c449405b86067f4'
@@ -51,6 +56,7 @@ function Invoke-BrieflarkInstall {
     $ClaudeSigner = 'Anthropic, PBC'
     $MinGit = [version]'2.34.0'
     $MinUv = [version]'0.5.0'
+    $MinNode = [version]'18.0.0'
     $MaxRootLength = 60
 
     # ---- 상태 --------------------------------------------------------------------------------------------------------
@@ -82,13 +88,14 @@ function Invoke-BrieflarkInstall {
     function Start-Step([string]$Number, [string]$Title) {
         $State.Step = "$Number $Title"
         Say ''
-        Say "[$Number/7] $Title"
+        Say "[$Number/8] $Title"
     }
 
-    function Confirm-Install([string]$Name, [string]$Source, [string]$Where) {
+    function Confirm-Install([string]$Name, [string]$Source, [string]$Where, [string]$Notice = '') {
         Say "  없어서 설치해요: $Name"
         Say "    출처: $Source"
         Say "    설치 위치: $Where"
+        if ($Notice) { Say "    $Notice" }
         if ($env:BRIEFLARK_INSTALL_YES -eq '1') { return }
         [void](Read-Host '    Enter를 누르면 설치해요 (그만두려면 Ctrl+C)')
     }
@@ -145,6 +152,7 @@ function Invoke-BrieflarkInstall {
         $known = @(
             (Join-Path $env:USERPROFILE '.local\bin'),
             (Join-Path $env:USERPROFILE '.bun\bin'),
+            (Join-Path $env:USERPROFILE '.local\node'),
             (Join-Path $env:ProgramFiles 'Git\cmd'),
             (Join-Path $env:LOCALAPPDATA 'Programs\Git\cmd')
         )
@@ -322,9 +330,9 @@ function Invoke-BrieflarkInstall {
         } else {
             $wingetPath = Find-Program 'winget' @()
             if ($wingetPath) {
-                Confirm-Install 'Git for Windows' 'winget (패키지 Git.Git)' '사용자 범위(안 되면 Program Files — 이때 관리자 허용 창이 한 번 떠요)'
+                Confirm-Install 'Git for Windows' 'winget (패키지 Git.Git)' '사용자 범위(안 되면 Program Files — 이때 관리자 허용 창이 한 번 떠요)' '(Enter를 누르면 winget과 Git 패키지의 사용 약관에 동의하고 설치하는 것으로 처리해요.)'
                 Say '    몇 분 걸릴 수 있어요. 멈춘 것처럼 보여도 기다려 주세요.'
-                $wingetArgs = @('install', '--id', 'Git.Git', '-e', '--accept-package-agreements', '--accept-source-agreements')
+                $wingetArgs = @('install', '--id', 'Git.Git', '-e', '--source', 'winget', '--accept-package-agreements', '--accept-source-agreements')
                 # 출력을 잡지 않고 그대로 보여 준다(winget 진행 표시가 보이도록).
                 $userArgs = $wingetArgs + @('--scope', 'user')
                 & $wingetPath @userArgs
@@ -409,8 +417,36 @@ function Invoke-BrieflarkInstall {
             Say "  설치했어요: bun $BunVersion"
         }
 
-        # ---- 4 Claude Code ----
-        Start-Step '4' 'Claude Code'
+        # ---- 4 Node.js ----
+        Start-Step '4' 'Node.js'
+        $nodeHome = Join-Path $env:USERPROFILE '.local\node'
+        $nodePath = Find-Program 'node' @((Join-Path $nodeHome 'node.exe'))
+        $nodeVersionFound = $null
+        if ($nodePath) { $nodeVersionFound = Get-ToolVersion $nodePath }
+        if ($nodeVersionFound -and $nodeVersionFound -ge $MinNode) {
+            Say "  이미 있어요: Node.js $nodeVersionFound (건너뜀)"
+        } else {
+            Confirm-Install "Node.js $NodeVersion" 'nodejs.org 공식 릴리스 (SHA256 대조)' $nodeHome
+            $zip = Get-VerifiedFile $NodeUrl $NodeSha256 "node-v$NodeVersion-win-x64.zip"
+            $files = Expand-VerifiedZip $zip 'node'
+            $source = Join-Path $files "node-v$NodeVersion-win-x64"
+            if (-not (Test-Path -LiteralPath (Join-Path $source 'node.exe') -PathType Leaf)) {
+                Stop-Install 'Node.js 압축 안에 node.exe가 없어요' '받은 압축 파일의 모양이 달라졌어요.' '안내한 사람에게 알려 주세요.'
+            }
+            # 폴더째 교체: 옛 버전 파일이 섞이지 않도록 지우고 새로 채운다(임시 폴더에서 이미 풀었다).
+            if (Test-Path -LiteralPath $nodeHome) { Remove-Item -LiteralPath $nodeHome -Recurse -Force }
+            [void](New-Item -ItemType Directory -Path $nodeHome -Force)
+            Copy-Item -Path (Join-Path $source '*') -Destination $nodeHome -Recurse -Force
+            Add-UserPathEntry $nodeHome
+            Update-SessionPath
+            if (-not (Get-ToolVersion (Join-Path $nodeHome 'node.exe'))) {
+                Stop-Install 'Node.js를 설치했는데 실행되지 않아요' '보안 프로그램이 막았을 수 있어요.' "${nodeHome} 폴더를 보안 프로그램 예외에 넣거나 안내한 사람에게 알려 주세요."
+            }
+            Say "  설치했어요: Node.js $NodeVersion"
+        }
+
+        # ---- 5 Claude Code ----
+        Start-Step '5' 'Claude Code'
         $claudeDirectory = Join-Path $env:USERPROFILE '.local\bin'
         $claudePath = Find-Program 'claude' @((Join-Path $claudeDirectory 'claude.exe'))
         if ($claudePath) {
@@ -441,8 +477,8 @@ function Invoke-BrieflarkInstall {
             Say '  설치했어요: Claude Code (서명자: Anthropic, PBC 확인)'
         }
 
-        # ---- 5 GitHub CLI + 로그인 ----
-        Start-Step '5' 'GitHub CLI·로그인'
+        # ---- 6 GitHub CLI + 로그인 ----
+        Start-Step '6' 'GitHub CLI·로그인'
         $ghDirectory = Join-Path $env:USERPROFILE '.local\bin'
         $ghPath = Find-Program 'gh' @((Join-Path $ghDirectory 'gh.exe'))
         $ghVersionFound = $null
@@ -486,7 +522,7 @@ function Invoke-BrieflarkInstall {
         }
 
         # ---- 6 제품 받기 + 서명 확인 ----
-        Start-Step '6' '제품 받기와 서명 확인'
+        Start-Step '7' '제품 받기와 서명 확인'
         $root = $env:BRIEFLARK_INSTALL_ROOT
         if (-not $root) { $root = Join-Path $env:USERPROFILE 'Brieflark' }
         $root = [IO.Path]::GetFullPath($root).TrimEnd('\')
@@ -628,11 +664,30 @@ function Invoke-BrieflarkInstall {
         }
 
         # ---- 7 마법사 ----
-        Start-Step '7' '설치 마법사'
+        Start-Step '8' '설치 마법사'
         if ($env:BRIEFLARK_SKIP_WIZARD -eq '1') {
             Say '  BRIEFLARK_SKIP_WIZARD=1 이라 마법사는 건너뛰어요.'
             Log '마법사 건너뜀(시험)'
             return
+        }
+        # 인증서 준비: 갓 만든 Windows는 루트 인증서 저장소에 텔레그램 체인의 루트가 아직 없다. 마법사의 Python은 저장소에 이미 있는
+        # 인증서만 읽고, Windows의 자동 루트 갱신은 schannel(curl.exe)이 체인을 만들 때만 일어난다 → 마법사 전에 curl.exe 로 한 번 접속해
+        # 저장소를 데운다(2026-10-21 Sandbox: CERTIFICATE_VERIFY_FAILED). 출력은 버리고, 실패해도 멈추지 않고 기록만 한다.
+        # 마법사의 Python 이 Windows에서 접속하는 곳은 텔레그램 서버뿐이다(Google 로그인은 맥 전용).
+        $certCurl = Join-Path ([Environment]::SystemDirectory) 'curl.exe'
+        $certHosts = @('https://api.telegram.org/')
+        foreach ($certHost in $certHosts) {
+            if (-not (Test-Path -LiteralPath $certCurl -PathType Leaf)) { Log 'curl.exe 가 없어 인증서 준비를 건너뜀'; break }
+            $savedCertPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                & $certCurl -sS -o NUL --connect-timeout 20 --max-time 30 $certHost 2>&1 | Out-Null
+                Log "인증서 준비 $certHost 종료 코드 $LASTEXITCODE"
+            } catch {
+                Log "인증서 준비 실패 $certHost"
+            } finally {
+                $ErrorActionPreference = $savedCertPreference
+            }
         }
         Push-Location -LiteralPath $root
         try {
