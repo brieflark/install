@@ -6,13 +6,13 @@
 # 저장소에서는 .gitattributes 의 `-text` 로 줄 끝 변환을 막아 둔다(해시가 곧 서빙되는 바이트).
 #
 # 단계 (있으면 건너뛰고, 없으면 이름·출처·설치 위치를 보인 뒤 Enter):
-#   0 점검   1 Git   2 uv   3 bun   4 Node.js   5 Claude Code   6 GitHub CLI·로그인   7 제품 받기 + 서명 확인   8 설치 마법사
+#   0 점검   1 Git   2 uv   3 bun   4 Node.js   5 Claude Code   6 GitHub CLI·로그인   7 Google Cloud CLI   8 제품 받기 + 서명 확인   9 설치 마법사
 #
 # 시험용 환경변수 (사용자에게 안내하지 않는다):
 #   BRIEFLARK_INSTALL_ROOT   제품 폴더를 %USERPROFILE%\Brieflark 대신 이 경로로 (운영 설치와 분리해 시험할 때). 60자 이하·OneDrive 밖.
 #   BRIEFLARK_INSTALL_YES=1  "Enter를 누르면" 질문을 묻지 않고 진행 (자동 시험용).
 #   BRIEFLARK_ALLOW_ADMIN=1  관리자 창에서도 진행 (Windows Sandbox 처럼 관리자뿐인 시험 환경용).
-#   BRIEFLARK_SKIP_WIZARD=1  8단계(마법사)를 넘기지 않고 건너뛴다 (운영 PC에서는 설치 가드가 멈추는 것이 정상).
+#   BRIEFLARK_SKIP_WIZARD=1  9단계(마법사)를 넘기지 않고 건너뛴다 (운영 PC에서는 설치 가드가 멈추는 것이 정상).
 #
 # 전체를 함수로 감싸 프로세스 종료 명령 대신 `return` 만 쓴다 — iex 안에서 종료하면 사용자의 PowerShell 창이 닫힌다.
 
@@ -47,6 +47,13 @@ function Invoke-BrieflarkInstall {
     $GhUrl = 'https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_windows_amd64.zip'
     $GhSha256 = 'ae64e556ecc240b200f7eba60d550e4bb60d78e860e69dd88c449405b86067f4'
 
+    # Google Cloud CLI(gcloud): 구글 공식 versioned archive (Windows x86_64, Python 동봉) — 설치 스크립트(install.bat) 없이 풀기만 한다.
+    # 공식 문서 https://cloud.google.com/sdk/docs/downloads-versioned-archives 가 같은 파일명·SHA256 을 공개한다(2026-10-21 문서값 = 받은 파일 해시).
+    # 구글 저장소 쪽 MD5 도 받은 파일과 같았다. 압축 안 google-cloud-sdk\bin\gcloud.cmd 가 platform\bundledpython\python.exe 를 스스로 찾는다.
+    $GcloudVersion = '590.0.0'
+    $GcloudUrl = 'https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-590.0.0-windows-x86_64-bundled-python.zip'
+    $GcloudSha256 = 'e6b97a6f4a084069daf5101e520f83ff950e9962eba505e9581141cf3590b999'
+
     # Git for Windows 설치 파일: winget 이 없거나 실패했을 때만 쓴다.
     $GitVersion = '2.56.0.2'
     $GitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.2/Git-2.56.0.2-64-bit.exe'
@@ -67,7 +74,7 @@ function Invoke-BrieflarkInstall {
     $savedGitPrompt = $env:GIT_TERMINAL_PROMPT
     $LogPath = $null
     $LogLines = New-Object System.Collections.Generic.List[string]
-    $State = @{ Step = '점검'; WorkFolder = $null }
+    $State = @{ Step = '점검'; WorkFolder = $null; Declined = $false }
     $ErrorActionPreference = 'Stop'
 
     # ---- 도우미 ------------------------------------------------------------------------------------------------------
@@ -88,15 +95,21 @@ function Invoke-BrieflarkInstall {
     function Start-Step([string]$Number, [string]$Title) {
         $State.Step = "$Number $Title"
         Say ''
-        Say "[$Number/8] $Title"
+        Say "[$Number/9] $Title"
     }
 
-    function Confirm-Install([string]$Name, [string]$Source, [string]$Where, [string]$Notice = '') {
+    # $Optional: 선택 도구는 s 로 건너뛸 수 있다(건너뛰면 $State.Declined). 필수 도구는 Enter 뿐이다.
+    function Confirm-Install([string]$Name, [string]$Source, [string]$Where, [string]$Notice = '', [bool]$Optional = $false) {
+        $State.Declined = $false
         Say "  없어서 설치해요: $Name"
         Say "    출처: $Source"
         Say "    설치 위치: $Where"
         if ($Notice) { Say "    $Notice" }
         if ($env:BRIEFLARK_INSTALL_YES -eq '1') { return }
+        if ($Optional) {
+            $State.Declined = (([string](Read-Host '    Enter를 누르면 설치해요 (건너뛰려면 s, 그만두려면 Ctrl+C)')).Trim().ToLowerInvariant() -eq 's')
+            return
+        }
         [void](Read-Host '    Enter를 누르면 설치해요 (그만두려면 Ctrl+C)')
     }
 
@@ -259,6 +272,28 @@ function Invoke-BrieflarkInstall {
         $folder = Join-Path (New-WorkFolder) ($Name + '-files')
         Expand-Archive -LiteralPath $Zip -DestinationPath $folder -Force
         return $folder
+    }
+
+    # gcloud 압축은 파일이 3만 개가 넘는다. Expand-Archive(Windows PowerShell 5.1)는 아주 느려서 .NET ZipFile 로 풀고, 안 되면 Expand-Archive 로 대신한다.
+    # 임시 폴더(%TEMP%)가 아니라 최종 위치와 같은 드라이브의 스테이징 폴더에 풀어, 마지막 이동이 이름 바꾸기만으로 끝나게 한다.
+    function Expand-GcloudZip([string]$Zip, [string]$Staging) {
+        foreach ($attempt in 1, 2) {
+            if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force }
+            [void](New-Item -ItemType Directory -Path $Staging -Force)
+            try {
+                if ($attempt -eq 1) {
+                    Add-Type -AssemblyName System.IO.Compression.FileSystem
+                    [System.IO.Compression.ZipFile]::ExtractToDirectory($Zip, $Staging)
+                } else {
+                    Expand-Archive -LiteralPath $Zip -DestinationPath $Staging -Force
+                }
+                break
+            } catch {
+                Log "gcloud 압축 풀기 실패 ($attempt/2): $($_.Exception.Message)"
+                if ($attempt -eq 2) { throw }
+            }
+        }
+        return (Join-Path $Staging 'google-cloud-sdk')
     }
 
     function Copy-IntoPlace([string]$Source, [string]$Directory, [string]$TargetName) {
@@ -521,8 +556,53 @@ function Invoke-BrieflarkInstall {
             Stop-Install 'git에 GitHub 로그인을 연결하지 못했어요' 'gh auth setup-git 가 실패했어요.' '같은 한 줄을 다시 붙여넣어 주세요.'
         }
 
-        # ---- 6 제품 받기 + 서명 확인 ----
-        Start-Step '7' '제품 받기와 서명 확인'
+        # ---- 7 Google Cloud CLI (gcloud) ----
+        # 마법사의 Google 연결이 프로젝트 만들기·API 켜기를 자동으로 하는 데 쓴다. 선택 도구라 해시 불일치(변조)가 아니면 실패해도 멈추지 않는다
+        # (gcloud 없이는 마법사가 지금처럼 콘솔 안내로 대신한다).
+        Start-Step '7' 'Google Cloud CLI (gcloud)'
+        $gcloudHome = Join-Path $env:USERPROFILE '.local\google-cloud-sdk'
+        $gcloudBin = Join-Path $gcloudHome 'bin'
+        $gcloudPath = Find-Program 'gcloud' @((Join-Path $gcloudBin 'gcloud.cmd'))
+        $gcloudVersionFound = $null
+        if ($gcloudPath) { $gcloudVersionFound = Get-ToolVersion $gcloudPath }
+        if ($gcloudVersionFound) {
+            Say "  이미 있어요: Google Cloud CLI $gcloudVersionFound (건너뜀)"
+        } else {
+            try {
+                Confirm-Install "Google Cloud CLI $GcloudVersion" 'Google 공식 다운로드 dl.google.com (SHA256 대조)' $gcloudHome '(약 100MB를 받아 풀어요. 몇 분 걸릴 수 있어요. 없어도 설치는 계속돼요.)' $true
+                if ($State.Declined) { throw 'BRIEFLARK_GCLOUD_DECLINED' }
+                $zip = Get-VerifiedFile $GcloudUrl $GcloudSha256 "google-cloud-sdk-$GcloudVersion-windows-x86_64-bundled-python.zip"
+                $extracted = Expand-GcloudZip $zip (Join-Path $env:USERPROFILE '.local\gcloud-new')
+                if (-not (Test-Path -LiteralPath (Join-Path $extracted 'bin\gcloud.cmd') -PathType Leaf)) {
+                    throw 'gcloud 압축 안에 bin\gcloud.cmd 가 없어요'
+                }
+                # 폴더째 교체: 옛 버전 파일이 섞이지 않도록 지우고 옮긴다(같은 드라이브라 이름 바꾸기만 한다).
+                if (Test-Path -LiteralPath $gcloudHome) { Remove-Item -LiteralPath $gcloudHome -Recurse -Force }
+                Move-Item -LiteralPath $extracted -Destination $gcloudHome
+                Remove-Item -LiteralPath (Split-Path -Parent $extracted) -Recurse -Force -ErrorAction SilentlyContinue
+                Add-UserPathEntry $gcloudBin
+                Update-SessionPath
+                if (Get-ToolVersion (Join-Path $gcloudBin 'gcloud.cmd')) {
+                    Say "  설치했어요: Google Cloud CLI $GcloudVersion"
+                } else {
+                    Log 'gcloud 설치 뒤 실행 확인 실패'
+                    Say '  gcloud를 풀었는데 실행되지 않아요. 건너뛰고 계속해요(Google 연결은 콘솔 안내로 해요).'
+                }
+            } catch {
+                Remove-Item -LiteralPath (Join-Path $env:USERPROFILE '.local\gcloud-new') -Recurse -Force -ErrorAction SilentlyContinue
+                if ($_.Exception.Message -eq 'BRIEFLARK_STOP' -or $_.Exception -is [System.Management.Automation.PipelineStoppedException]) { throw }
+                if ($_.Exception.Message -eq 'BRIEFLARK_GCLOUD_DECLINED') {
+                    Log 'gcloud 설치를 사용자가 건너뜀'
+                    Say '  건너뛰었어요. Google 연결은 콘솔 안내로 해요(나중에 한 줄 설치를 다시 실행하면 gcloud를 설치해요).'
+                } else {
+                    Log "gcloud 설치 실패: $($_.Exception.Message)"
+                    Say '  gcloud를 설치하지 못했어요. 건너뛰고 계속해요(Google 연결은 콘솔 안내로 해요).'
+                }
+            }
+        }
+
+        # ---- 8 제품 받기 + 서명 확인 ----
+        Start-Step '8' '제품 받기와 서명 확인'
         $root = $env:BRIEFLARK_INSTALL_ROOT
         if (-not $root) { $root = Join-Path $env:USERPROFILE 'Brieflark' }
         $root = [IO.Path]::GetFullPath($root).TrimEnd('\')
@@ -663,8 +743,8 @@ function Invoke-BrieflarkInstall {
             Say '  받았어요'
         }
 
-        # ---- 7 마법사 ----
-        Start-Step '8' '설치 마법사'
+        # ---- 9 마법사 ----
+        Start-Step '9' '설치 마법사'
         if ($env:BRIEFLARK_SKIP_WIZARD -eq '1') {
             Say '  BRIEFLARK_SKIP_WIZARD=1 이라 마법사는 건너뛰어요.'
             Log '마법사 건너뜀(시험)'
