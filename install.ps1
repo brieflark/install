@@ -769,8 +769,15 @@ function Invoke-BrieflarkInstall {
                 $ErrorActionPreference = $savedCertPreference
             }
         }
+        # 마법사가 예상 못 한 오류로 멈추면 같은 기계 상태 폴더의 setup-last-error.log 에 Traceback 을 남긴다(비밀값은 가리고 홈 경로는 ~).
+        # 이번 실행 ID가 같고 첫 줄이 "이 오류로 멈췄다"인 것만 이 설치 기록으로 옮겨 담는다 — 지난번 오류나, 선택 단계만
+        # 멈추고 설치는 이어 간 기록을 이번 멈춤의 이유로 보이지 않게.
+        $wizardCrashLog = Join-Path $localData 'VaultAssistant\setup-last-error.log'
+        $wizardInvocation = [Guid]::NewGuid().ToString('N')
+        $savedWizardInvocation = $env:BRIEFLARK_SETUP_INVOCATION
         Push-Location -LiteralPath $root
         try {
+            $env:BRIEFLARK_SETUP_INVOCATION = $wizardInvocation
             $env:GIT_TERMINAL_PROMPT = $savedGitPrompt
             $setupCmd = Join-Path $root 'setup.cmd'
             if (Test-Path -LiteralPath $setupCmd -PathType Leaf) {
@@ -781,11 +788,24 @@ function Invoke-BrieflarkInstall {
             }
             $wizardCode = $LASTEXITCODE
         } finally {
+            $env:BRIEFLARK_SETUP_INVOCATION = $savedWizardInvocation
             Pop-Location
         }
         if ($wizardCode -ne 0) {
             Log "마법사 종료 $wizardCode"
-            Stop-Install "설치 마법사가 중간에 멈췄어요(종료 코드 $wizardCode)" '마법사 화면에 이유가 적혀 있어요.' '화면의 안내대로 한 뒤, 같은 한 줄을 다시 붙여넣으면 이어서 해요.'
+            $wizardCrashed = $false
+            try {
+                $crashLines = [IO.File]::ReadAllLines($wizardCrashLog, (New-Object System.Text.UTF8Encoding($false)))
+                if ($crashLines.Count -gt 1 -and $crashLines[0] -eq '# brieflark-setup: stopped by this error' -and $crashLines[1] -ceq "# invocation: $wizardInvocation") {
+                    $wizardCrashed = $true
+                    Log '마법사 오류 기록(setup-last-error.log):'
+                    foreach ($crashLine in $crashLines) { Log "  $crashLine" }
+                }
+            } catch { }
+            if ($wizardCrashed) {
+                Stop-Install "설치 마법사가 예상하지 못한 오류로 멈췄어요(종료 코드 $wizardCode)" '마법사 화면의 "예상하지 못한 오류" 줄이 그 이유예요. 자세한 내용은 아래 기록 파일에 옮겨 두었어요.' '같은 한 줄을 다시 붙여넣어 주세요(마법사 화면의 setup 명령을 실행해도 같아요). 다시 해도 같은 곳에서 멈추면 아래 기록 파일을 안내한 사람에게 보내 주세요.'
+            }
+            Stop-Install "설치 마법사가 끝나지 않았어요(종료 코드 $wizardCode)" '마법사 화면 위쪽의 안내("멈췄어요"·"고칠 것"·"중단했어요")에 이유가 적혀 있어요.' '그 안내대로 한 뒤, 같은 한 줄을 다시 붙여넣으면 이어서 해요.'
         }
     } catch {
         $caught = $_.Exception
@@ -807,7 +827,8 @@ function Invoke-BrieflarkInstall {
         } else {
             Say "  아마 이유: $why"
             Say "  할 일: $todo"
-            Say '  같은 한 줄을 다시 붙여넣으면 이어서 해요.'
+            # 할 일에 이미 다시 붙여넣으라는 말이 있으면 되풀이하지 않는다(2026-10-25 마법사 멈춤에서 두 번 나왔다)
+            if ($todo -notlike '*같은 한 줄을 다시 붙여넣*') { Say '  같은 한 줄을 다시 붙여넣으면 이어서 해요.' }
         }
         try {
             [void](New-Item -ItemType Directory -Path (Split-Path -Parent $LogPath) -Force)
